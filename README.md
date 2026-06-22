@@ -1,43 +1,60 @@
 # ArkLab
 
-ArkLab is a local-first RAG evaluation workbench for finding out why a retrieval-augmented generation system fails.
+ArkLab 是一个本地优先的 RAG 评测与诊断工具，用来回答一个很具体的问题：
 
-It is built around a simple idea: a RAG system should not only return an answer, it should leave enough evidence to explain whether the problem came from retrieval, context construction, answer generation, abstention behavior, or the evaluation set itself.
+> 一个知识库问答系统答错、拒答或幻觉时，到底是哪里出了问题？
 
-The current project is intentionally CLI-first. It focuses on the technical core before adding a dashboard or hosted service.
+它不是聊天机器人，也不是知识库 SaaS。当前版本刻意先做 CLI，把核心实验链路跑通：文档进入、检索、回答、评测、失败归因、回归测试。
 
-## What ArkLab Does
+## 项目定位
 
-ArkLab turns a folder of documents and a JSONL evaluation set into a reproducible RAG experiment.
+ArkLab 关注的是 RAG 系统的工程诊断，而不只是“调一次 API 看答案好不好”。
 
-It can:
+它把一次 RAG 实验拆成几层：
 
-- run local smoke tests without any model API;
-- call real Ark/Doubao models through `arkcli`;
-- use BM25, local dense hashing, Ark embedding, or hybrid retrieval;
-- evaluate Recall@K, MRR, NDCG, faithfulness, answer relevancy, abstain rate, rejection rate, and false-answer rate;
-- write traces and failure cases to JSONL;
-- promote failures into a regression set for the next run;
-- compare a baseline and a candidate run to see what was fixed or regressed;
-- import or generate benchmark-style datasets such as EnterpriseRAG-Bench, MultiHop-RAG, and no-answer cases inspired by UAEval4RAG;
-- plug into RAGAS for additional standard RAG metrics.
+- 检索有没有找回正确材料；
+- 正确材料有没有排到足够靠前；
+- 模型是否基于材料回答；
+- 模型是否过度保守而拒答；
+- 模型是否在无答案问题上乱答；
+- 改 prompt、embedding、reranker、chunk 参数或模型后，问题是否真的被修复。
 
-In plain terms, ArkLab is not just "calling an LLM API". It is an orchestration and diagnosis layer around RAG experiments.
+因此 ArkLab 更准确的定位是：
 
-## Why This Exists
+```text
+RAG 评测编排 + 失败诊断 + 回归飞轮
+```
 
-Most RAG demos stop at "the answer looks right". Production RAG work usually fails in messier ways:
+## 能做什么
 
-- the right document is not retrieved;
-- the right document is retrieved but ranked too low;
-- the model sees the evidence but still refuses to answer;
-- the model answers confidently with unsupported content;
-- the knowledge base genuinely cannot answer the question;
-- a prompt or threshold change fixes one case but breaks another.
+ArkLab 可以把一个文档目录和一份 JSONL 评测集变成可复现的 RAG 实验。
 
-ArkLab keeps those cases as structured data, so improvements can be tested again instead of judged by memory or a single lucky prompt.
+当前已经支持：
 
-## Core Workflow
+- 本地离线 smoke test，不依赖任何模型 API；
+- 通过 `arkcli` 调用真实方舟 / 豆包模型；
+- 使用 BM25、本地 dense hashing、方舟 embedding 或混合检索；
+- 计算 Recall@K、MRR、NDCG、faithfulness、answer relevancy、abstain rate、rejection rate、false-answer rate；
+- 记录 JSONL trace 和 failure pool；
+- 把失败样本提升成下一轮回归评测集；
+- 对比 baseline 和 candidate，判断哪些问题修复了、哪些退化了；
+- 导入或生成 EnterpriseRAG-Bench、MultiHop-RAG、无答案题等 benchmark 风格数据；
+- 可选接入 RAGAS，复用标准 RAG 评测指标。
+
+## 为什么需要它
+
+很多 RAG demo 只证明“这个问题看起来答对了”。但真实系统常见的问题更复杂：
+
+- 该找的文档没有找回来；
+- 找回来了，但排序太低；
+- 证据已经在上下文里，模型还是拒答；
+- 模型答得很流畅，但内容没有证据支撑；
+- 问题本来就超出知识库范围，模型却硬答；
+- 一个 prompt 改动修好了 A 问题，却弄坏了 B 问题。
+
+ArkLab 的目标是把这些失败变成结构化数据，而不是靠印象判断“好像变好了”。
+
+## 核心流程
 
 ```text
 documents + eval set
@@ -55,30 +72,30 @@ regression eval set
 compare baseline vs candidate
 ```
 
-This is the "data flywheel" in the current project. The flywheel does not fine-tune a model by itself. It makes failures reusable, so changes to retrieval, prompts, thresholds, or models can be evaluated against the exact cases they were supposed to fix.
+这里的数据飞轮不是自动训练模型，而是把每一轮失败沉淀成下一轮必须复测的问题。后续无论改检索、prompt、阈值还是模型，都可以用同一批失败样本验证是否真的修复。
 
-## Architecture
+## 架构
 
 ```text
 arklab/
-  providers/      model providers: local heuristic, arkcli
-  embeddings/     Ark embedding client and SQLite cache
-  rag/            retrieval, rerank, RAG pipeline
-  evaluation/     basic metrics and RAGAS adapter
-  benchmarks/     benchmark import and conversion
-  trace/          JSONL trace and failure-pool writers
-  flywheel.py     failure promotion and run comparison
-  cli.py          command-line interface
+  providers/      模型 provider：local heuristic、arkcli
+  embeddings/     方舟 embedding client 和 SQLite 缓存
+  rag/            检索、rerank、RAG pipeline
+  evaluation/     基础指标和 RAGAS adapter
+  benchmarks/     benchmark 导入与转换
+  trace/          JSONL trace 和 failure pool writer
+  flywheel.py     失败样本提升与前后对比
+  cli.py          命令行入口
 ```
 
-Runtime artifacts are intentionally kept out of git:
+运行过程中产生的数据默认不进 git：
 
 ```text
-data/             traces, reports, caches, failure pools
-benchmarks/       locally converted benchmark samples
+data/             trace、报告、缓存、failure pool
+benchmarks/       本地转换后的 benchmark 样本
 ```
 
-## Quickstart
+## 快速开始
 
 ```bash
 python3 -m venv .venv
@@ -86,21 +103,21 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Run a local offline smoke test:
+跑一个离线评测：
 
 ```bash
 arklab eval --docs examples/docs --eval-set examples/evals/qa.jsonl
 ```
 
-Ask one question against the example knowledge base:
+对示例知识库问一个问题：
 
 ```bash
 arklab query --docs examples/docs "ArkLab 的 abstain 机制什么时候触发？"
 ```
 
-## Running With Real Models
+## 接真实模型
 
-ArkLab can call Ark through the local `arkcli` profile. Model credentials are read from the user's Ark/arkcli environment and are not stored in this repository.
+ArkLab 通过本机 `arkcli` profile 调用方舟模型。模型凭证从用户本机环境读取，不写入仓库。
 
 ```bash
 arklab eval \
@@ -110,7 +127,7 @@ arklab eval \
   --eval-set examples/evals/qa.jsonl
 ```
 
-For retrieval, the strongest current local setup is usually Ark embedding plus a conservative generation prompt:
+如果要使用方舟 embedding 做真实向量检索：
 
 ```bash
 arklab eval \
@@ -122,19 +139,19 @@ arklab eval \
   --eval-set examples/evals/qa.jsonl
 ```
 
-Ark embedding results are cached in SQLite by default, so repeated experiments do not pay for the same chunks again.
+embedding 结果会默认写入本地 SQLite 缓存，避免重复为同一批 chunk 付费。
 
-## Diagnosis Features
+## 失败诊断
 
-ArkLab writes structured failure records when a case shows one of the expected failure modes:
+ArkLab 会把失败样本写入 failure pool，并给出粗粒度失败类型：
 
-- `retrieval_fail`: relevant evidence was not retrieved;
-- `low_confidence_abstain`: retrieval was too weak to answer safely;
-- `generation_fail_abstain`: evidence was present but the model still refused;
-- `generation_fail_hallucination`: the answer was insufficiently supported;
-- `unanswerable_answered`: an unanswerable question was answered anyway.
+- `retrieval_fail`：相关证据没有被检索到；
+- `low_confidence_abstain`：检索置信度太低，不适合回答；
+- `generation_fail_abstain`：证据存在，但模型仍然拒答；
+- `generation_fail_hallucination`：回答缺少上下文支撑；
+- `unanswerable_answered`：无答案问题被错误回答。
 
-Those failure records can be promoted into a regression set:
+这些失败样本可以提升成下一轮回归评测集：
 
 ```bash
 arklab flywheel-next \
@@ -143,7 +160,7 @@ arklab flywheel-next \
   --output-eval-set data/flywheel/next_eval.jsonl
 ```
 
-After changing retrieval, prompts, or thresholds, compare the new run against the old one:
+然后比较两个方案：
 
 ```bash
 arklab flywheel-compare \
@@ -152,76 +169,89 @@ arklab flywheel-compare \
   --focus-eval-set data/flywheel/next_eval.jsonl
 ```
 
-## Evaluation Data Format
+## 评测集格式
 
-ArkLab uses JSON Lines. A minimal answerable case looks like this:
+ArkLab 使用 JSON Lines。一个最小的可回答样本：
 
 ```json
 {"query":"Recall@K 衡量什么？","answer":"Recall@K 衡量前 K 个检索结果是否覆盖相关文档。","relevant_ids":["rag_metrics.md"]}
 ```
 
-An unanswerable case looks like this:
+一个无答案样本：
 
 ```json
 {"query":"今天这家公司的实时股价是多少？","answerable":false,"expected_behavior":"abstain","relevant_ids":[]}
 ```
 
-`relevant_ids` can point to chunk IDs, source file names, or benchmark document IDs such as `dsid_...`.
+`relevant_ids` 可以指向 chunk ID、源文件名，或类似 `dsid_...` 的 benchmark 文档 ID。
 
-## Benchmarks
+## Benchmark 策略
 
-ArkLab currently supports a pragmatic benchmark strategy:
+当前项目采用实用路线：
 
-- start with small local examples for smoke tests;
-- import EnterpriseRAG-Bench slices for enterprise-style document QA;
-- import MultiHop-RAG to expose cross-document synthesis failures;
-- generate no-answer cases to test abstention behavior;
-- use RAGAS when a standard evaluator is useful.
+- 用 `examples/` 做最小 smoke test；
+- 用 EnterpriseRAG-Bench 做企业文档问答样本；
+- 用 MultiHop-RAG 暴露跨文档综合失败；
+- 生成无答案题测试拒答能力；
+- 需要标准指标时接 RAGAS。
 
-The benchmark importers output the same ArkLab format: a `docs/` directory plus an `eval.jsonl` file.
+所有 benchmark 最终都会转换成同一套 ArkLab 格式：`docs/` 目录加 `eval.jsonl`。
 
-## Guardrails
+## Guardrail
 
-The pipeline can abstain based on:
+pipeline 可以基于以下信号拒答：
 
-- low retrieval confidence;
-- provider refusal;
-- low faithfulness;
-- low answer relevancy.
+- 检索置信度低；
+- provider 主动拒答；
+- faithfulness 低；
+- answer relevancy 低。
 
-`--min-answer-relevancy` is optional and defaults to off. It is useful for conservative experiments where a retrieved context is true but not actually relevant to the question.
+`--min-answer-relevancy` 默认关闭，适合做更保守的消融实验，用来拦住“上下文是真的，但回答和问题不相关”的情况。
 
-## Development
+## 开发
 
-Install development dependencies:
+安装开发依赖：
 
 ```bash
 pip install -e '.[dev]'
 ```
 
-Run the offline test suite:
+运行离线测试：
 
 ```bash
 pytest
 ```
 
-The GitHub Actions CI runs the offline suite on Python 3.10, 3.11, and 3.12. It does not require Ark credentials.
+GitHub Actions 会在 Python 3.10、3.11、3.12 上跑离线测试，不需要方舟凭证。
 
-## Project Status
+## 当前边界
 
-ArkLab is an early MVP. The useful center is already working:
+ArkLab 目前不做这些事：
 
-- CLI evaluation loop;
-- real Ark model integration;
-- Ark embedding retrieval;
-- failure-pool based regression loop;
-- benchmark adapters;
-- offline tests and CI.
+- 不提供生产知识库服务；
+- 不提供前端聊天 UI；
+- 不自动训练或微调模型；
+- 不保证回答一定正确；
+- 不替代 RAGAS / DeepEval 这类完整评测库；
+- 不做企业级权限、租户、监控、部署。
 
-Likely next steps:
+它现在最有价值的部分是：让 RAG 失败样本可记录、可归因、可复测。
 
-- stronger reranking;
-- LLM-as-judge based failure diagnosis;
-- automatic prompt/retrieval ablation runs;
-- richer trace inspection;
-- eventually, a dashboard over the same CLI artifacts.
+## 项目状态
+
+当前已经完成：
+
+- CLI 评测主链路；
+- 方舟真实模型接入；
+- 方舟 embedding 检索；
+- failure pool 和回归飞轮；
+- benchmark adapter；
+- 离线测试和 CI。
+
+后续可以继续补：
+
+- 更强的 reranker；
+- LLM-as-Judge 失败诊断；
+- prompt / retrieval / chunking 自动消融；
+- trace 可视化；
+- 基于 CLI 产物的 dashboard。
