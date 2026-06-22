@@ -5,6 +5,7 @@ import json
 import math
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -17,6 +18,7 @@ from arklab.diagnostics import summarize_diagnostics
 from arklab.evaluation.llm_judge import judge_cases_with_arkcli
 from arklab.embeddings.ark import ArkEmbeddingClient
 from arklab.evaluation.ragas_adapter import RagasCase, evaluate_with_ragas
+from arklab.experiments import append_experiment, build_experiment_record, load_experiments
 from arklab.flywheel import compare_reports, promote_failures_to_eval_set, write_jsonl
 from arklab.models import RetrievalHit
 from arklab.providers.arkcli import INSTRUCTIONS_BY_PRESET
@@ -25,7 +27,7 @@ from arklab.rag.embedding_retrieval import ArkEmbeddingRetriever, ArkHybridRetri
 from arklab.rag.pipeline import RagPipeline
 from arklab.rag.retrieval import HybridRetriever
 from arklab.rag.rerank import create_reranker
-from arklab.recipes import RECIPES, recipe_manifest, run_recipe
+from arklab.recipes import RECIPES, recipe_file_manifest, recipe_manifest, run_recipe, run_recipe_file
 from arklab.reporting import export_report, trace_to_html
 from arklab.text import load_documents, sentence_split
 from arklab.trace.failure_pool import FailurePoolWriter, classify_failure
@@ -249,6 +251,8 @@ def _ndcg_for_relevance(hits: list[RetrievalHit], relevance: dict[str, float]) -
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.perf_counter()
     pipeline = _build_pipeline(args)
     rows = _load_eval_rows(Path(args.eval_set))
     if not rows:
@@ -285,6 +289,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             "provider": {
                 "model": result.provider.model,
                 "usage": normalize_usage(result.provider.usage),
+                "error_type": result.provider.raw.get("error_type"),
             },
             "contexts": [hit.chunk.text for hit in result.hits],
         }
@@ -302,6 +307,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
             abstained=result.abstained,
             faithfulness=faithfulness,
             answerable=answerable,
+            abstain_reason=result.abstain_reason,
         )
         if failure_pool and failure_type:
             failure_pool.write(
@@ -378,6 +384,16 @@ def cmd_eval(args: argparse.Namespace) -> int:
         payload["ragas"] = ragas_report
     if args.output:
         _write_json(Path(args.output), payload)
+    if args.experiment_registry:
+        append_experiment(
+            Path(args.experiment_registry),
+            build_experiment_record(
+                args=args,
+                payload=payload,
+                started_at=started_at,
+                elapsed_seconds=time.perf_counter() - started,
+            ),
+        )
     _print_json(payload)
     return 0
 
@@ -404,8 +420,28 @@ def cmd_recipe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_recipe(args: argparse.Namespace) -> int:
+    recipe_path = Path(args.recipe)
+    payload = recipe_file_manifest(recipe_path) if args.dry_run else run_recipe_file(recipe_path)
+    if args.output:
+        _write_json(Path(args.output), payload)
+    _print_json(payload)
+    return 0
+
+
 def cmd_export_report(args: argparse.Namespace) -> int:
     payload = export_report(Path(args.report), Path(args.output), fmt=args.format)
+    _print_json(payload)
+    return 0
+
+
+def cmd_experiments(args: argparse.Namespace) -> int:
+    rows = load_experiments(Path(args.registry))
+    if args.limit and args.limit > 0:
+        rows = rows[-args.limit :]
+    payload = {"registry": args.registry, "experiments": len(rows), "rows": rows}
+    if args.output:
+        _write_json(Path(args.output), payload)
     _print_json(payload)
     return 0
 
@@ -672,6 +708,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="输出 token 单价，用于估算本轮成本；单位：每百万 token",
     )
+    eval_parser.add_argument(
+        "--experiment-name",
+        default=None,
+        help="写入实验登记表时使用的人类可读名称",
+    )
+    eval_parser.add_argument(
+        "--experiment-registry",
+        default="data/experiments/registry.jsonl",
+        help="实验登记表 JSONL；传空字符串可关闭",
+    )
+    eval_parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="实验标签，可重复传入，例如 --tag benchmark=multihop --tag prompt=baseline",
+    )
     eval_parser.add_argument("--output", default=None, help="把完整评测报告写入 JSON 文件")
     eval_parser.add_argument(
         "--failure-pool",
@@ -857,6 +909,15 @@ def build_parser() -> argparse.ArgumentParser:
     recipe_parser.add_argument("--output", default=None)
     recipe_parser.set_defaults(func=cmd_recipe)
 
+    run_recipe_parser = subparsers.add_parser(
+        "run-recipe",
+        help="展开或运行 YAML recipe matrix",
+    )
+    run_recipe_parser.add_argument("--recipe", required=True, help="YAML recipe 文件路径")
+    run_recipe_parser.add_argument("--dry-run", action="store_true", help="只打印展开后的命令，不执行")
+    run_recipe_parser.add_argument("--output", default=None)
+    run_recipe_parser.set_defaults(func=cmd_run_recipe)
+
     export_parser = subparsers.add_parser(
         "export-report",
         help="把 ArkLab 报告导出成其他评测/观测工具可消费的格式",
@@ -865,6 +926,15 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--output", required=True)
     export_parser.add_argument("--format", choices=["deepeval-json", "phoenix-jsonl"], required=True)
     export_parser.set_defaults(func=cmd_export_report)
+
+    experiments_parser = subparsers.add_parser(
+        "experiments",
+        help="查看实验登记表里的历史 eval 记录",
+    )
+    experiments_parser.add_argument("--registry", default="data/experiments/registry.jsonl")
+    experiments_parser.add_argument("--limit", type=int, default=20)
+    experiments_parser.add_argument("--output", default=None)
+    experiments_parser.set_defaults(func=cmd_experiments)
     return parser
 
 

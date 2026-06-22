@@ -7,6 +7,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+data/
 data/traces/*.jsonl
 data/failure_pool/*.jsonl
 data/reports/*.json

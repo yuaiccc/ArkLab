@@ -1,0 +1,20 @@
+name: multihop-safe7-prompt-ablation
+eval:
+  docs: benchmarks/multihop_rag/real_12/docs
+  eval_set: benchmarks/multihop_rag/real_12/eval_safe.jsonl
+  retriever: ark-embedding
+  reranker: none
+  provider: arkcli
+  model: doubao-seed-2-0-mini-260428
+  temperature: 0.0
+  chunk_tokens: 900
+  chunk_overlap: 120
+  embedding_cache: data/cache/embeddings/multihop-real12.sqlite
+  embedding_workers: 8
+  tag:
+    - benchmark=multihop
+    - dataset=safe7
+matrix:
+  arkcli_prompt_preset:
+    - baseline
+    - multihop

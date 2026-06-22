@@ -37,6 +37,8 @@ def test_eval_cli_writes_basic_report(tmp_path: Path, capsys) -> None:
             str(output),
             "--failure-pool",
             "",
+            "--experiment-registry",
+            "",
             "--trace",
             "",
         ]

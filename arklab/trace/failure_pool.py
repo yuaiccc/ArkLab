@@ -20,7 +20,10 @@ def classify_failure(
     abstained: bool,
     faithfulness: float,
     answerable: bool = True,
+    abstain_reason: str | None = None,
 ) -> str | None:
+    if abstain_reason == "provider_content_block":
+        return "provider_content_block"
     if not answerable:
         return None if abstained else "unanswerable_answered"
     if recall is not None and recall == 0.0:

@@ -21,6 +21,9 @@ def diagnose_case(case: dict[str, Any]) -> dict[str, Any]:
     elif recall <= 0.0:
         root_cause = "retrieval_failure"
         action = "improve_index_chunking_embedding_or_query_rewrite"
+    elif abstained and reason == "provider_content_block":
+        root_cause = "provider_content_block"
+        action = "filter_or_rewrite_safety_sensitive_benchmark_cases"
     elif abstained and reason == "provider_abstain":
         root_cause = "over_abstention"
         action = "adjust_prompt_context_packaging_or_answerability_threshold"
