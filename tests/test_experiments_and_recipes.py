@@ -1,11 +1,12 @@
 import json
+import sys
 from pathlib import Path
 
 from arklab.cli import main
 from arklab.experiments import load_experiments
 from arklab.models import DocumentChunk
 from arklab.rag.pipeline import RagPipeline
-from arklab.recipes import recipe_file_manifest
+from arklab.recipes import execution_command, recipe_file_manifest
 
 
 class BlockingProvider:
@@ -108,3 +109,4 @@ matrix:
     assert len(manifest["commands"]) == 2
     assert manifest["commands"][0][:2] == ["arklab", "eval"]
     assert "--experiment-name" in manifest["commands"][0]
+    assert execution_command(manifest["commands"][0])[:3] == [sys.executable, "-m", "arklab"]

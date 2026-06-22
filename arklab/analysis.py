@@ -35,13 +35,20 @@ def _metric(value: Any) -> str:
 
 
 def _id_matches(expected: str, actual: str) -> bool:
-    if expected == actual:
-        return True
-    if actual.startswith(expected + "#"):
-        return True
-    if expected.startswith(actual + "#"):
-        return True
-    return False
+    expected_doc, expected_chunk = _split_doc_id(expected)
+    actual_doc, actual_chunk = _split_doc_id(actual)
+    if expected_doc != actual_doc:
+        return False
+    if expected_chunk is not None and actual_chunk is not None:
+        return expected_chunk == actual_chunk
+    return True
+
+
+def _split_doc_id(value: str) -> tuple[str, str | None]:
+    doc_id, separator, chunk_id = value.strip().partition("#")
+    if doc_id.endswith(".txt"):
+        doc_id = doc_id[:-4]
+    return doc_id, chunk_id if separator else None
 
 
 def evidence_coverage_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +124,7 @@ def build_experiment_summary(report_path: Path) -> tuple[str, dict[str, Any]]:
     report = load_report(report_path)
     cases = report.get("cases", [])
     diagnostics = report.get("diagnostics") or summarize_diagnostics(cases)
-    evidence = report.get("evidence_coverage") or summarize_evidence_coverage(cases)
+    evidence = summarize_evidence_coverage(cases)
     failing = []
     for index, case in enumerate(cases, start=1):
         diagnosis = diagnose_case(case)

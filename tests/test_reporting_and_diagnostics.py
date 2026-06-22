@@ -278,6 +278,19 @@ def test_evidence_coverage_and_summary_commands(tmp_path: Path, capsys) -> None:
     assert coverage["average_coverage"] == 0.5
     assert coverage["missing_coverage_cases"] == 1
 
+    multihop_coverage = summarize_evidence_coverage(
+        [
+            {
+                "query": "Q",
+                "expected_relevant_ids": ["multihop_abc"],
+                "hit_ids": ["multihop_abc.txt#0"],
+                "top_hit": "multihop_abc.txt#0",
+            }
+        ]
+    )
+    assert multihop_coverage["average_coverage"] == 1.0
+    assert multihop_coverage["top_hit_relevance_rate"] == 1.0
+
     markdown, payload = build_experiment_summary(report)
     assert "Evidence Coverage" in markdown
     assert payload["evidence_coverage"]["average_coverage"] == 0.5

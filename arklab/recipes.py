@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -81,19 +83,54 @@ def recipe_manifest(name: str) -> dict[str, Any]:
     return {"name": name, "commands": RECIPES[name]}
 
 
+def execution_command(command: list[str]) -> list[str]:
+    if command and command[0] == "arklab":
+        return [sys.executable, "-m", "arklab", *command[1:]]
+    return command
+
+
+def completed_step(command: list[str], proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    step: dict[str, Any] = {
+        "command": command,
+        "returncode": proc.returncode,
+    }
+    if proc.returncode == 0:
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            step["stdout_tail"] = proc.stdout[-1000:]
+        else:
+            step["result"] = {
+                "summary": payload.get("summary"),
+                "usage": payload.get("usage"),
+                "diagnostics": {
+                    "root_cause_counts": payload.get("diagnostics", {}).get(
+                        "root_cause_counts",
+                        {},
+                    )
+                },
+                "output": payload.get("output"),
+                "rows": payload.get("rows"),
+                "case_count": (
+                    len(payload["cases"])
+                    if isinstance(payload.get("cases"), list)
+                    else payload.get("cases")
+                ),
+            }
+        if proc.stderr.strip():
+            step["stderr_tail"] = proc.stderr[-1000:]
+    else:
+        step["stdout_tail"] = proc.stdout[-4000:]
+        step["stderr_tail"] = proc.stderr[-4000:]
+    return step
+
+
 def run_recipe(name: str) -> dict[str, Any]:
     manifest = recipe_manifest(name)
     completed: list[dict[str, Any]] = []
     for command in manifest["commands"]:
-        proc = subprocess.run(command, check=False, text=True, capture_output=True)
-        completed.append(
-            {
-                "command": command,
-                "returncode": proc.returncode,
-                "stdout": proc.stdout[-4000:],
-                "stderr": proc.stderr[-4000:],
-            }
-        )
+        proc = subprocess.run(execution_command(command), check=False, text=True, capture_output=True)
+        completed.append(completed_step(command, proc))
         if proc.returncode != 0:
             return {"name": name, "ok": False, "steps": completed}
     return {"name": name, "ok": True, "steps": completed}
@@ -184,15 +221,8 @@ def run_recipe_file(path: Path) -> dict[str, Any]:
     manifest = recipe_file_manifest(path)
     completed: list[dict[str, Any]] = []
     for command in manifest["commands"]:
-        proc = subprocess.run(command, check=False, text=True, capture_output=True)
-        completed.append(
-            {
-                "command": command,
-                "returncode": proc.returncode,
-                "stdout": proc.stdout[-4000:],
-                "stderr": proc.stderr[-4000:],
-            }
-        )
+        proc = subprocess.run(execution_command(command), check=False, text=True, capture_output=True)
+        completed.append(completed_step(command, proc))
         if proc.returncode != 0:
             return {"name": manifest["name"], "ok": False, "steps": completed}
     return {"name": manifest["name"], "ok": True, "steps": completed}
