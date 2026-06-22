@@ -10,6 +10,12 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+from arklab.analysis import (
+    build_compare_summary,
+    build_experiment_summary,
+    summarize_evidence_coverage,
+    write_summary,
+)
 from arklab.benchmarks.enterprise_rag import import_enterprise_rag_bench
 from arklab.benchmarks.multihop_rag import import_multihop_rag
 from arklab.benchmarks.uaeval4rag import UA_CATEGORIES, generate_uaeval4rag
@@ -357,6 +363,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         "retriever": _retriever_info(pipeline),
         "usage": usage,
         "diagnostics": summarize_diagnostics(per_case),
+        "evidence_coverage": summarize_evidence_coverage(per_case),
         "cases": per_case,
     }
     if args.input_price_per_1m or args.output_price_per_1m:
@@ -471,6 +478,29 @@ def cmd_compare_drilldown(args: argparse.Namespace) -> int:
         max_cases=args.max_cases,
     )
     _print_json(payload)
+    return 0
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    has_single = bool(args.report)
+    has_compare = bool(args.baseline_report or args.candidate_report)
+    if has_single == has_compare:
+        raise ValueError("pass either --report or both --baseline-report and --candidate-report")
+    if has_compare and not (args.baseline_report and args.candidate_report):
+        raise ValueError("--baseline-report and --candidate-report must be passed together")
+    if has_single:
+        markdown, payload = build_experiment_summary(Path(args.report))
+    else:
+        markdown, payload = build_compare_summary(
+            baseline_report_path=Path(args.baseline_report),
+            candidate_report_path=Path(args.candidate_report),
+            focus_eval_set_path=Path(args.focus_eval_set) if args.focus_eval_set else None,
+        )
+    if args.output:
+        result = write_summary(markdown, payload, Path(args.output))
+        _print_json(result)
+    else:
+        print(markdown)
     return 0
 
 
@@ -991,6 +1021,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_drilldown_parser.add_argument("--max-cases", type=int, default=None)
     compare_drilldown_parser.set_defaults(func=cmd_compare_drilldown)
+
+    summary_parser = subparsers.add_parser(
+        "summary",
+        help="生成单次实验或 baseline/candidate 对比的 Markdown 复盘",
+    )
+    summary_parser.add_argument("--report", default=None)
+    summary_parser.add_argument("--baseline-report", default=None)
+    summary_parser.add_argument("--candidate-report", default=None)
+    summary_parser.add_argument("--focus-eval-set", default=None)
+    summary_parser.add_argument("--output", default=None, help="Markdown 输出路径；不传则打印到 stdout")
+    summary_parser.set_defaults(func=cmd_summary)
     return parser
 
 

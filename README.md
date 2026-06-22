@@ -40,6 +40,7 @@ ArkLab 可以把一个文档目录和一份 JSONL 评测集变成可复现的 RA
 - 记录 JSONL trace 和 failure pool；
 - 把 trace 转成可本地打开的 HTML；
 - 为失败样本生成逐 case Markdown 诊断；
+- 生成单次实验 / 前后对比的 Markdown 复盘；
 - 把失败样本提升成下一轮回归评测集；
 - 对比 baseline 和 candidate，判断哪些问题修复了、哪些退化了；
 - 汇总多次实验报告，观察指标趋势；
@@ -170,7 +171,9 @@ arklab eval \
   --eval-set examples/evals/qa.jsonl
 ```
 
-如果真实模型因为平台内容安全拦截某个样本，ArkLab 会把它记录为 `provider_content_block`，而不是直接中断整轮评测。这类样本通常应该进入单独的安全/合规诊断队列，而不是和普通答错混在一起。
+如果真实模型因为平台内容安全拦截某个样本，ArkLab 会把它记录为 `provider_content_block`，而不是直接中断整轮评测。这类情况常见于真实新闻 benchmark：问题或上下文里可能出现刑事审判、欺诈指控、政治人物、博彩、加密货币等主题，即使用户只是要求基于新闻事实回答，模型供应商也可能因为输出安全策略拒绝生成。
+
+`provider_content_block` 不等同于检索失败，也不等同于模型不会回答。它的含义是：证据可能已经进入上下文，但供应商安全策略不允许输出。处理这类样本时，通常应该单独标注或过滤，必要时改写问题、拆分安全敏感 benchmark，或换用更适合该场景的模型 / 安全策略，而不是把它和普通答错混在一起。
 
 这些失败样本可以提升成下一轮回归评测集：
 
@@ -251,6 +254,8 @@ pipeline 可以基于以下信号拒答：
 arklab trace-html --trace data/traces/arklab.jsonl --output data/reports/trace.html
 arklab drilldown --report data/reports/baseline.json --output-dir data/drilldowns/baseline --failures-only
 arklab compare-drilldown --baseline-report data/reports/baseline.json --candidate-report data/reports/candidate.json --output-dir data/drilldowns/baseline-vs-candidate
+arklab summary --report data/reports/baseline.json --output data/reports/baseline-summary.md
+arklab summary --baseline-report data/reports/baseline.json --candidate-report data/reports/candidate.json --output data/reports/compare-summary.md
 arklab trend --reports 'data/reports/*.json' --output data/reports/trend.json
 arklab experiments --registry data/experiments/registry.jsonl --limit 10
 arklab export-report --report data/reports/baseline.json --format deepeval-json --output data/reports/deepeval.json
@@ -306,6 +311,7 @@ ArkLab 目前不做这些事：
 - 可选 LLM-as-Judge；
 - 失败 root cause 诊断；
 - case drilldown；
+- experiment summary；
 - trace HTML、成本估算、多次实验趋势；
 - experiment registry；
 - YAML recipe matrix；

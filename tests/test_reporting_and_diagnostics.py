@@ -1,6 +1,11 @@
 import json
 from pathlib import Path
 
+from arklab.analysis import (
+    build_compare_summary,
+    build_experiment_summary,
+    summarize_evidence_coverage,
+)
 from arklab.cli import main
 from arklab.cost import estimate_cost, normalize_usage
 from arklab.diagnostics import diagnose_case
@@ -218,6 +223,136 @@ def test_compare_drilldown_writes_fixed_case(tmp_path: Path, capsys) -> None:
     printed = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert printed["cases"] == 1
+
+
+def test_evidence_coverage_and_summary_commands(tmp_path: Path, capsys) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "cases": 2,
+                    "recall_at_k": 0.5,
+                    "faithfulness": 0.5,
+                    "answer_relevancy": 0.4,
+                    "abstain_rate": 0.5,
+                },
+                "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                "cases": [
+                    {
+                        "query": "Q1",
+                        "answer": "A1",
+                        "expected_relevant_ids": ["doc#0"],
+                        "hit_ids": ["doc#0"],
+                        "contexts": ["A1"],
+                        "answerable": True,
+                        "abstained": False,
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "faithfulness": 1.0,
+                        "answer_relevancy": 0.8,
+                    },
+                    {
+                        "query": "Q2",
+                        "answer": "无法基于当前知识库回答这个问题。",
+                        "expected_relevant_ids": ["doc#1"],
+                        "hit_ids": ["doc#0"],
+                        "contexts": ["A1"],
+                        "answerable": True,
+                        "abstained": True,
+                        "abstain_reason": "provider_abstain",
+                        "recall_at_k": 0.0,
+                        "mrr": 0.0,
+                        "ndcg_at_k": 0.0,
+                        "faithfulness": 0.0,
+                        "answer_relevancy": 0.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coverage = summarize_evidence_coverage(json.loads(report.read_text())["cases"])
+    assert coverage["average_coverage"] == 0.5
+    assert coverage["missing_coverage_cases"] == 1
+
+    markdown, payload = build_experiment_summary(report)
+    assert "Evidence Coverage" in markdown
+    assert payload["evidence_coverage"]["average_coverage"] == 0.5
+
+    output = tmp_path / "summary.md"
+    exit_code = main(["summary", "--report", str(report), "--output", str(output)])
+    printed = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output.exists()
+    assert Path(printed["json"]).exists()
+
+
+def test_compare_summary_command(tmp_path: Path, capsys) -> None:
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    query = "Q"
+    baseline.write_text(
+        json.dumps(
+            {
+                "summary": {"faithfulness": 0.0, "abstain_rate": 1.0},
+                "cases": [
+                    {
+                        "query": query,
+                        "faithfulness": 0.0,
+                        "answer_relevancy": 0.0,
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "abstained": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        json.dumps(
+            {
+                "summary": {"faithfulness": 1.0, "abstain_rate": 0.0},
+                "cases": [
+                    {
+                        "query": query,
+                        "faithfulness": 1.0,
+                        "answer_relevancy": 0.5,
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "abstained": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    markdown, payload = build_compare_summary(
+        baseline_report_path=baseline,
+        candidate_report_path=candidate,
+    )
+    assert "Changed Cases" in markdown
+    assert payload["comparison"]["status_counts"] == {"fixed": 1}
+
+    output = tmp_path / "compare-summary.md"
+    exit_code = main(
+        [
+            "summary",
+            "--baseline-report",
+            str(baseline),
+            "--candidate-report",
+            str(candidate),
+            "--output",
+            str(output),
+        ]
+    )
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["output"] == str(output)
 
 
 def test_trend_and_recipe_cli(tmp_path: Path, capsys) -> None:
