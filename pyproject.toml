@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
 ragas = [
   "ragas==0.2.15",
   "langchain<0.4",

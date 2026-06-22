@@ -27,12 +27,28 @@ def chunk_text(text: str, *, max_tokens: int = 180, overlap: int = 30) -> list[s
         return []
 
     chunks: list[str] = []
-    current: list[str] = []
-    current_tokens: list[str] = []
+    current: list[tuple[str, list[str]]] = []
 
     def flush() -> None:
         if current:
-            chunks.append("\n".join(current).strip())
+            chunks.append("\n".join(sentence for sentence, _tokens in current).strip())
+
+    def current_token_count() -> int:
+        return sum(len(tokens) for _sentence, tokens in current)
+
+    def overlap_tail() -> list[tuple[str, list[str]]]:
+        if overlap <= 0:
+            return []
+        retained: list[tuple[str, list[str]]] = []
+        retained_tokens = 0
+        for sentence, tokens in reversed(current):
+            if retained_tokens + len(tokens) > overlap:
+                break
+            retained.append((sentence, tokens))
+            retained_tokens += len(tokens)
+            if retained_tokens >= overlap:
+                break
+        return list(reversed(retained))
 
     for sentence in sentences:
         sentence_tokens = tokenize(sentence)
@@ -41,7 +57,6 @@ def chunk_text(text: str, *, max_tokens: int = 180, overlap: int = 30) -> list[s
         if len(sentence_tokens) > max_tokens:
             flush()
             current = []
-            current_tokens = []
             step = max(1, max_tokens - overlap)
             for start in range(0, len(sentence_tokens), step):
                 part = sentence_tokens[start : start + max_tokens]
@@ -49,15 +64,12 @@ def chunk_text(text: str, *, max_tokens: int = 180, overlap: int = 30) -> list[s
                     chunks.append(" ".join(part))
             continue
 
-        would_exceed = current and len(current_tokens) + len(sentence_tokens) > max_tokens
+        would_exceed = current and current_token_count() + len(sentence_tokens) > max_tokens
         if would_exceed:
             flush()
-            overlap_tokens = current_tokens[-overlap:] if overlap > 0 else []
-            current = []
-            current_tokens = overlap_tokens[:]
+            current = overlap_tail()
 
-        current.append(sentence)
-        current_tokens.extend(sentence_tokens)
+        current.append((sentence, sentence_tokens))
 
     flush()
     return chunks

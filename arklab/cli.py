@@ -107,6 +107,7 @@ def _build_pipeline(args: argparse.Namespace) -> RagPipeline:
         retriever=retriever,
         min_retrieval_score=args.min_retrieval_score,
         min_faithfulness=args.min_faithfulness,
+        min_answer_relevancy=args.min_answer_relevancy,
         trace_writer=trace_writer,
     )
 
@@ -566,6 +567,12 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chunk-overlap", type=int, default=30)
     parser.add_argument("--min-retrieval-score", type=float, default=0.01)
     parser.add_argument("--min-faithfulness", type=float, default=0.35)
+    parser.add_argument(
+        "--min-answer-relevancy",
+        type=float,
+        default=0.0,
+        help="答案与问题的最低词面相关度阈值；默认关闭，适合做保守 guardrail 消融",
+    )
     parser.add_argument("--trace", default="data/traces/arklab.jsonl", help="JSONL trace 输出路径")
 
 

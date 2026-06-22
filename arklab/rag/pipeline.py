@@ -37,6 +37,7 @@ class RagPipeline:
         retriever: Retriever | None = None,
         min_retrieval_score: float = 0.01,
         min_faithfulness: float = 0.35,
+        min_answer_relevancy: float = 0.0,
         trace_writer: TraceWriter | None = None,
     ) -> None:
         self.chunks = chunks
@@ -46,6 +47,7 @@ class RagPipeline:
         self.reranker = reranker or NoopReranker()
         self.min_retrieval_score = min_retrieval_score
         self.min_faithfulness = min_faithfulness
+        self.min_answer_relevancy = min_answer_relevancy
         self.trace_writer = trace_writer
         self.retriever = retriever or HybridRetriever(chunks)
 
@@ -60,6 +62,7 @@ class RagPipeline:
             provider_result = self.provider.answer(query=query, hits=[])
             answer = "无法基于当前知识库回答这个问题。"
             faithfulness = 0.0
+            relevancy = 0.0
             abstained = True
             abstain_reason = "low_retrieval_confidence"
         else:
@@ -68,12 +71,14 @@ class RagPipeline:
             faithfulness = self.provider.judge_faithfulness(answer=answer, contexts=contexts)
             if faithfulness == 0.0:
                 faithfulness = lexical_faithfulness(answer, contexts)
+            relevancy = answer_relevancy(answer, query)
             provider_refused = any(marker in answer for marker in REFUSAL_MARKERS)
-            abstained = provider_refused or faithfulness < self.min_faithfulness
+            low_relevancy = relevancy < self.min_answer_relevancy
+            abstained = provider_refused or faithfulness < self.min_faithfulness or low_relevancy
             if provider_refused:
                 abstain_reason = "provider_abstain"
             elif abstained:
-                abstain_reason = "low_faithfulness"
+                abstain_reason = "low_answer_relevancy" if low_relevancy else "low_faithfulness"
             else:
                 abstain_reason = None
             if abstained:
@@ -82,7 +87,7 @@ class RagPipeline:
         metrics = {
             "top_retrieval_score": top_score,
             "faithfulness": faithfulness,
-            "answer_relevancy": answer_relevancy(answer, query),
+            "answer_relevancy": relevancy,
             "abstain": 1.0 if abstained else 0.0,
         }
         result = RagResult(
