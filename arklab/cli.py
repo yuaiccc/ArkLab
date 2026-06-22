@@ -15,7 +15,7 @@ from arklab.benchmarks.multihop_rag import import_multihop_rag
 from arklab.benchmarks.uaeval4rag import UA_CATEGORIES, generate_uaeval4rag
 from arklab.cost import estimate_cost, normalize_usage, summarize_usage
 from arklab.diagnostics import summarize_diagnostics
-from arklab.drilldown import build_drilldown
+from arklab.drilldown import build_compare_drilldown, build_drilldown
 from arklab.evaluation.llm_judge import judge_cases_with_arkcli
 from arklab.embeddings.ark import ArkEmbeddingClient
 from arklab.evaluation.ragas_adapter import RagasCase, evaluate_with_ragas
@@ -454,6 +454,20 @@ def cmd_drilldown(args: argparse.Namespace) -> int:
         report_path=Path(args.report),
         output_dir=Path(args.output_dir),
         failures_only=args.failures_only,
+        max_cases=args.max_cases,
+    )
+    _print_json(payload)
+    return 0
+
+
+def cmd_compare_drilldown(args: argparse.Namespace) -> int:
+    statuses = set(args.status) if args.status else {"fixed", "regressed"}
+    payload = build_compare_drilldown(
+        baseline_report_path=Path(args.baseline_report),
+        candidate_report_path=Path(args.candidate_report),
+        output_dir=Path(args.output_dir),
+        focus_eval_set_path=Path(args.focus_eval_set) if args.focus_eval_set else None,
+        statuses=statuses,
         max_cases=args.max_cases,
     )
     _print_json(payload)
@@ -959,6 +973,24 @@ def build_parser() -> argparse.ArgumentParser:
     drilldown_parser.add_argument("--failures-only", action="store_true")
     drilldown_parser.add_argument("--max-cases", type=int, default=None)
     drilldown_parser.set_defaults(func=cmd_drilldown)
+
+    compare_drilldown_parser = subparsers.add_parser(
+        "compare-drilldown",
+        help="为 baseline/candidate 报告生成逐 case 对比诊断",
+    )
+    compare_drilldown_parser.add_argument("--baseline-report", required=True)
+    compare_drilldown_parser.add_argument("--candidate-report", required=True)
+    compare_drilldown_parser.add_argument("--output-dir", required=True)
+    compare_drilldown_parser.add_argument("--focus-eval-set", default=None)
+    compare_drilldown_parser.add_argument(
+        "--status",
+        action="append",
+        choices=["fixed", "regressed", "unchanged"],
+        default=None,
+        help="要输出的 case 状态；可重复传入",
+    )
+    compare_drilldown_parser.add_argument("--max-cases", type=int, default=None)
+    compare_drilldown_parser.set_defaults(func=cmd_compare_drilldown)
     return parser
 
 

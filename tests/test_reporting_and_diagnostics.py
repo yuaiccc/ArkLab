@@ -4,7 +4,7 @@ from pathlib import Path
 from arklab.cli import main
 from arklab.cost import estimate_cost, normalize_usage
 from arklab.diagnostics import diagnose_case
-from arklab.drilldown import build_drilldown
+from arklab.drilldown import build_compare_drilldown, build_drilldown
 from arklab.evaluation.llm_judge import extract_json_object, normalize_judge_payload
 from arklab.reporting import export_report, trace_to_html
 from arklab.trends import build_trend
@@ -125,6 +125,94 @@ def test_drilldown_writes_case_markdown(tmp_path: Path, capsys) -> None:
             "--output-dir",
             str(tmp_path / "drilldown-cli"),
             "--failures-only",
+        ]
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert printed["cases"] == 1
+
+
+def test_compare_drilldown_writes_fixed_case(tmp_path: Path, capsys) -> None:
+    query = "ArkLab 修什么问题？"
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "summary": {"faithfulness": 0.0, "abstain_rate": 1.0},
+                "cases": [
+                    {
+                        "query": query,
+                        "answer": "无法基于当前知识库回答这个问题。",
+                        "expected_answer": "ArkLab 诊断 RAG 失败。",
+                        "expected_relevant_ids": ["doc#0"],
+                        "hit_ids": ["doc#0"],
+                        "contexts": ["ArkLab 诊断 RAG 失败。"],
+                        "answerable": True,
+                        "abstained": True,
+                        "abstain_reason": "provider_abstain",
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "faithfulness": 0.0,
+                        "answer_relevancy": 0.0,
+                        "top_hit": "doc#0",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        json.dumps(
+            {
+                "summary": {"faithfulness": 1.0, "abstain_rate": 0.0},
+                "cases": [
+                    {
+                        "query": query,
+                        "answer": "ArkLab 诊断 RAG 失败。",
+                        "expected_answer": "ArkLab 诊断 RAG 失败。",
+                        "expected_relevant_ids": ["doc#0"],
+                        "hit_ids": ["doc#0"],
+                        "contexts": ["ArkLab 诊断 RAG 失败。"],
+                        "answerable": True,
+                        "abstained": False,
+                        "abstain_reason": None,
+                        "recall_at_k": 1.0,
+                        "mrr": 1.0,
+                        "ndcg_at_k": 1.0,
+                        "faithfulness": 1.0,
+                        "answer_relevancy": 0.6,
+                        "top_hit": "doc#0",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "compare"
+    result = build_compare_drilldown(
+        baseline_report_path=baseline,
+        candidate_report_path=candidate,
+        output_dir=output_dir,
+    )
+
+    assert result["cases"] == 1
+    assert result["status_counts"] == {"fixed": 1}
+    page = next(output_dir.glob("001-fixed-*.md")).read_text(encoding="utf-8")
+    assert "Metric Delta" in page
+    assert "Baseline" in page
+    assert "Candidate" in page
+
+    exit_code = main(
+        [
+            "compare-drilldown",
+            "--baseline-report",
+            str(baseline),
+            "--candidate-report",
+            str(candidate),
+            "--output-dir",
+            str(tmp_path / "compare-cli"),
         ]
     )
     printed = json.loads(capsys.readouterr().out)

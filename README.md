@@ -250,6 +250,7 @@ pipeline 可以基于以下信号拒答：
 ```bash
 arklab trace-html --trace data/traces/arklab.jsonl --output data/reports/trace.html
 arklab drilldown --report data/reports/baseline.json --output-dir data/drilldowns/baseline --failures-only
+arklab compare-drilldown --baseline-report data/reports/baseline.json --candidate-report data/reports/candidate.json --output-dir data/drilldowns/baseline-vs-candidate
 arklab trend --reports 'data/reports/*.json' --output data/reports/trend.json
 arklab experiments --registry data/experiments/registry.jsonl --limit 10
 arklab export-report --report data/reports/baseline.json --format deepeval-json --output data/reports/deepeval.json
