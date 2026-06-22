@@ -46,5 +46,7 @@ def test_eval_cli_writes_basic_report(tmp_path: Path, capsys) -> None:
 
     assert exit_code == 0
     assert printed["summary"]["cases"] == 1
+    assert printed["usage"]["total_tokens"] == 0
+    assert printed["diagnostics"]["root_cause_counts"]
     assert written["summary"]["recall_at_k"] == 1.0
-
+    assert written["cases"][0]["provider"]["model"] == "local"

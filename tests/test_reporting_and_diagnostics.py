@@ -1,0 +1,109 @@
+import json
+from pathlib import Path
+
+from arklab.cli import main
+from arklab.cost import estimate_cost, normalize_usage
+from arklab.diagnostics import diagnose_case
+from arklab.evaluation.llm_judge import extract_json_object, normalize_judge_payload
+from arklab.reporting import export_report, trace_to_html
+from arklab.trends import build_trend
+
+
+def test_diagnostics_classifies_retrieval_failure() -> None:
+    diagnosis = diagnose_case(
+        {
+            "answerable": True,
+            "recall_at_k": 0.0,
+            "faithfulness": 0.0,
+            "answer_relevancy": 0.0,
+            "abstained": False,
+        }
+    )
+
+    assert diagnosis["root_cause"] == "retrieval_failure"
+    assert diagnosis["suggested_action"] == "improve_index_chunking_embedding_or_query_rewrite"
+
+
+def test_usage_and_cost_normalization() -> None:
+    usage = normalize_usage({"prompt_tokens": 1000, "completion_tokens": 250})
+    cost = estimate_cost(usage, input_price_per_1m=2.0, output_price_per_1m=8.0)
+
+    assert usage == {"input_tokens": 1000, "output_tokens": 250, "total_tokens": 1250}
+    assert cost["total_cost"] == 0.004
+
+
+def test_trace_html_and_export_formats(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "query": "Q",
+                "answer": "A",
+                "metrics": {"faithfulness": 1.0},
+                "hits": [{"id": "doc#0"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    html = tmp_path / "trace.html"
+    result = trace_to_html(trace, html)
+
+    assert result["events"] == 1
+    assert "ArkLab Trace" in html.read_text(encoding="utf-8")
+
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "summary": {"cases": 1, "recall_at_k": 1.0},
+                "cases": [
+                    {
+                        "query": "Q",
+                        "answer": "A",
+                        "hit_ids": ["doc#0"],
+                        "faithfulness": 1.0,
+                        "answer_relevancy": 1.0,
+                        "recall_at_k": 1.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    deepeval = tmp_path / "deepeval.json"
+    phoenix = tmp_path / "phoenix.jsonl"
+
+    assert export_report(report, deepeval, fmt="deepeval-json")["cases"] == 1
+    assert json.loads(deepeval.read_text(encoding="utf-8"))[0]["input"] == "Q"
+    assert export_report(report, phoenix, fmt="phoenix-jsonl")["cases"] == 1
+    assert json.loads(phoenix.read_text(encoding="utf-8").strip())["output"] == "A"
+
+
+def test_trend_and_recipe_cli(tmp_path: Path, capsys) -> None:
+    first = tmp_path / "a.json"
+    second = tmp_path / "b.json"
+    first.write_text(json.dumps({"summary": {"cases": 1, "recall_at_k": 0.5}}), encoding="utf-8")
+    second.write_text(json.dumps({"summary": {"cases": 1, "recall_at_k": 1.0}}), encoding="utf-8")
+
+    trend = build_trend([str(tmp_path / "*.json")])
+    assert [row["recall_at_k"] for row in trend["rows"]] == [0.5, 1.0]
+
+    output = tmp_path / "trend.json"
+    exit_code = main(["trend", "--reports", str(tmp_path / "*.json"), "--output", str(output)])
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["reports"] == 2
+    capsys.readouterr()
+
+    exit_code = main(["recipe", "--name", "local-smoke"])
+    printed = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert printed["name"] == "local-smoke"
+
+
+def test_llm_judge_json_extraction_and_clamping() -> None:
+    payload = extract_json_object('```json\n{"faithfulness": 2, "root_cause": "passed"}\n```')
+    normalized = normalize_judge_payload(payload)
+
+    assert normalized["faithfulness"] == 1.0
+    assert normalized["root_cause"] == "passed"

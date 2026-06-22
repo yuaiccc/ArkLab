@@ -12,6 +12,9 @@ from typing import Any
 from arklab.benchmarks.enterprise_rag import import_enterprise_rag_bench
 from arklab.benchmarks.multihop_rag import import_multihop_rag
 from arklab.benchmarks.uaeval4rag import UA_CATEGORIES, generate_uaeval4rag
+from arklab.cost import estimate_cost, normalize_usage, summarize_usage
+from arklab.diagnostics import summarize_diagnostics
+from arklab.evaluation.llm_judge import judge_cases_with_arkcli
 from arklab.embeddings.ark import ArkEmbeddingClient
 from arklab.evaluation.ragas_adapter import RagasCase, evaluate_with_ragas
 from arklab.flywheel import compare_reports, promote_failures_to_eval_set, write_jsonl
@@ -22,9 +25,12 @@ from arklab.rag.embedding_retrieval import ArkEmbeddingRetriever, ArkHybridRetri
 from arklab.rag.pipeline import RagPipeline
 from arklab.rag.retrieval import HybridRetriever
 from arklab.rag.rerank import create_reranker
+from arklab.recipes import RECIPES, recipe_manifest, run_recipe
+from arklab.reporting import export_report, trace_to_html
 from arklab.text import load_documents, sentence_split
 from arklab.trace.failure_pool import FailurePoolWriter, classify_failure
 from arklab.trace.writer import TraceWriter
+from arklab.trends import build_trend
 
 
 MAX_EMBEDDING_WORKERS = 32
@@ -137,7 +143,7 @@ def cmd_query(args: argparse.Namespace) -> int:
             ],
             "provider": {
                 "model": result.provider.model,
-                "usage": result.provider.usage,
+                "usage": normalize_usage(result.provider.usage),
             },
             "retriever": _retriever_info(pipeline),
         }
@@ -276,6 +282,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
             "rejection_correct": (not answerable and result.abstained),
             "top_hit": result.hits[0].chunk.id if result.hits else None,
             "hit_ids": [hit.chunk.id for hit in result.hits],
+            "provider": {
+                "model": result.provider.model,
+                "usage": normalize_usage(result.provider.usage),
+            },
+            "contexts": [hit.chunk.text for hit in result.hits],
         }
         per_case.append(case)
         ragas_cases.append(
@@ -331,11 +342,34 @@ def cmd_eval(args: argparse.Namespace) -> int:
             else 0.0
         ),
     }
+    usage = summarize_usage(per_case)
     payload: dict[str, Any] = {
         "summary": summary,
         "retriever": _retriever_info(pipeline),
+        "usage": usage,
+        "diagnostics": summarize_diagnostics(per_case),
         "cases": per_case,
     }
+    if args.input_price_per_1m or args.output_price_per_1m:
+        payload["cost"] = estimate_cost(
+            usage,
+            input_price_per_1m=args.input_price_per_1m,
+            output_price_per_1m=args.output_price_per_1m,
+        )
+    if args.llm_judge == "arkcli":
+        judged = judge_cases_with_arkcli(
+            per_case,
+            model=args.llm_judge_model or args.model,
+            timeout=args.llm_judge_timeout,
+        )
+        for case, judge in zip(per_case, judged, strict=False):
+            case["llm_judge"] = judge
+        payload["llm_judge"] = {
+            "provider": "arkcli",
+            "model": args.llm_judge_model or args.model or "arkcli-default",
+            "cases": judged,
+            "usage": summarize_usage([{"provider": {"usage": item.get("usage", {})}} for item in judged]),
+        }
     if args.evaluator == "ragas":
         ragas_report = evaluate_with_ragas(
             ragas_cases,
@@ -344,6 +378,34 @@ def cmd_eval(args: argparse.Namespace) -> int:
         payload["ragas"] = ragas_report
     if args.output:
         _write_json(Path(args.output), payload)
+    _print_json(payload)
+    return 0
+
+
+def cmd_trace_html(args: argparse.Namespace) -> int:
+    payload = trace_to_html(Path(args.trace), Path(args.output))
+    _print_json(payload)
+    return 0
+
+
+def cmd_trend(args: argparse.Namespace) -> int:
+    payload = build_trend(args.reports)
+    if args.output:
+        _write_json(Path(args.output), payload)
+    _print_json(payload)
+    return 0
+
+
+def cmd_recipe(args: argparse.Namespace) -> int:
+    payload = run_recipe(args.name) if args.run else recipe_manifest(args.name)
+    if args.output:
+        _write_json(Path(args.output), payload)
+    _print_json(payload)
+    return 0
+
+
+def cmd_export_report(args: argparse.Namespace) -> int:
+    payload = export_report(Path(args.report), Path(args.output), fmt=args.format)
     _print_json(payload)
     return 0
 
@@ -590,6 +652,26 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--eval-set", required=True, help="JSONL: query + relevant_ids")
     eval_parser.add_argument("--evaluator", choices=["basic", "ragas"], default="basic")
     eval_parser.add_argument("--ragas-judge-model", default="doubao-seed-2-0-mini-260428")
+    eval_parser.add_argument(
+        "--llm-judge",
+        choices=["none", "arkcli"],
+        default="none",
+        help="可选 LLM-as-Judge；arkcli 会额外调用一次方舟模型做结构化裁判",
+    )
+    eval_parser.add_argument("--llm-judge-model", default=None, help="LLM-as-Judge 使用的模型；默认复用 --model")
+    eval_parser.add_argument("--llm-judge-timeout", type=int, default=120)
+    eval_parser.add_argument(
+        "--input-price-per-1m",
+        type=float,
+        default=0.0,
+        help="输入 token 单价，用于估算本轮成本；单位：每百万 token",
+    )
+    eval_parser.add_argument(
+        "--output-price-per-1m",
+        type=float,
+        default=0.0,
+        help="输出 token 单价，用于估算本轮成本；单位：每百万 token",
+    )
     eval_parser.add_argument("--output", default=None, help="把完整评测报告写入 JSON 文件")
     eval_parser.add_argument(
         "--failure-pool",
@@ -749,6 +831,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出对比报告 JSON；传空字符串可关闭",
     )
     flywheel_compare_parser.set_defaults(func=cmd_flywheel_compare)
+
+    trace_html_parser = subparsers.add_parser(
+        "trace-html",
+        help="把 JSONL trace 转成可本地打开的 HTML",
+    )
+    trace_html_parser.add_argument("--trace", default="data/traces/arklab.jsonl")
+    trace_html_parser.add_argument("--output", default="data/reports/trace.html")
+    trace_html_parser.set_defaults(func=cmd_trace_html)
+
+    trend_parser = subparsers.add_parser(
+        "trend",
+        help="汇总多次 eval 报告，生成趋势 JSON",
+    )
+    trend_parser.add_argument("--reports", nargs="+", required=True, help="报告路径或 glob，例如 data/reports/*.json")
+    trend_parser.add_argument("--output", default=None)
+    trend_parser.set_defaults(func=cmd_trend)
+
+    recipe_parser = subparsers.add_parser(
+        "recipe",
+        help="查看或运行内置 benchmark recipe",
+    )
+    recipe_parser.add_argument("--name", choices=sorted(RECIPES), required=True)
+    recipe_parser.add_argument("--run", action="store_true", help="实际运行 recipe；不传则只打印命令清单")
+    recipe_parser.add_argument("--output", default=None)
+    recipe_parser.set_defaults(func=cmd_recipe)
+
+    export_parser = subparsers.add_parser(
+        "export-report",
+        help="把 ArkLab 报告导出成其他评测/观测工具可消费的格式",
+    )
+    export_parser.add_argument("--report", required=True)
+    export_parser.add_argument("--output", required=True)
+    export_parser.add_argument("--format", choices=["deepeval-json", "phoenix-jsonl"], required=True)
+    export_parser.set_defaults(func=cmd_export_report)
     return parser
 
 

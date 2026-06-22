@@ -35,11 +35,16 @@ ArkLab 可以把一个文档目录和一份 JSONL 评测集变成可复现的 RA
 - 通过 `arkcli` 调用真实方舟 / 豆包模型；
 - 使用 BM25、本地 dense hashing、方舟 embedding 或混合检索；
 - 计算 Recall@K、MRR、NDCG、faithfulness、answer relevancy、abstain rate、rejection rate、false-answer rate；
+- 可选用方舟模型做 LLM-as-Judge，输出 faithfulness、relevancy、correctness 和失败原因；
+- 统计模型 token usage，并可按输入 / 输出单价估算实验成本；
 - 记录 JSONL trace 和 failure pool；
+- 把 trace 转成可本地打开的 HTML；
 - 把失败样本提升成下一轮回归评测集；
 - 对比 baseline 和 candidate，判断哪些问题修复了、哪些退化了；
+- 汇总多次实验报告，观察指标趋势；
 - 导入或生成 EnterpriseRAG-Bench、MultiHop-RAG、无答案题等 benchmark 风格数据；
-- 可选接入 RAGAS，复用标准 RAG 评测指标。
+- 可选接入 RAGAS，复用标准 RAG 评测指标；
+- 导出 DeepEval / Phoenix 形状的数据，方便接入现有评测和可观测生态。
 
 ## 为什么需要它
 
@@ -143,13 +148,24 @@ embedding 结果会默认写入本地 SQLite 缓存，避免重复为同一批 c
 
 ## 失败诊断
 
-ArkLab 会把失败样本写入 failure pool，并给出粗粒度失败类型：
+ArkLab 会把失败样本写入 failure pool，并在报告里给出 root cause：
 
 - `retrieval_fail`：相关证据没有被检索到；
 - `low_confidence_abstain`：检索置信度太低，不适合回答；
 - `generation_fail_abstain`：证据存在，但模型仍然拒答；
 - `generation_fail_hallucination`：回答缺少上下文支撑；
 - `unanswerable_answered`：无答案问题被错误回答。
+
+报告里的 `diagnostics` 字段会把这些样本进一步归因成 `retrieval_failure`、`over_abstention`、`unsupported_generation`、`off_topic_answer` 等，并给出下一步建议。需要更强裁判时，可以让方舟模型做 LLM-as-Judge：
+
+```bash
+arklab eval \
+  --provider arkcli \
+  --model doubao-seed-2-0-mini-260428 \
+  --llm-judge arkcli \
+  --docs examples/docs \
+  --eval-set examples/evals/qa.jsonl
+```
 
 这些失败样本可以提升成下一轮回归评测集：
 
@@ -197,6 +213,13 @@ ArkLab 使用 JSON Lines。一个最小的可回答样本：
 
 所有 benchmark 最终都会转换成同一套 ArkLab 格式：`docs/` 目录加 `eval.jsonl`。
 
+常用 benchmark 可以通过 recipe 先查看、再运行：
+
+```bash
+arklab recipe --name enterprise-basic10
+arklab recipe --name enterprise-basic10 --run
+```
+
 ## Guardrail
 
 pipeline 可以基于以下信号拒答：
@@ -207,6 +230,27 @@ pipeline 可以基于以下信号拒答：
 - answer relevancy 低。
 
 `--min-answer-relevancy` 默认关闭，适合做更保守的消融实验，用来拦住“上下文是真的，但回答和问题不相关”的情况。
+
+## 实验资产
+
+一次 `eval` 会产出结构化报告。围绕这份报告，ArkLab 还能继续做几件事：
+
+```bash
+arklab trace-html --trace data/traces/arklab.jsonl --output data/reports/trace.html
+arklab trend --reports 'data/reports/*.json' --output data/reports/trend.json
+arklab export-report --report data/reports/baseline.json --format deepeval-json --output data/reports/deepeval.json
+arklab export-report --report data/reports/baseline.json --format phoenix-jsonl --output data/reports/phoenix.jsonl
+```
+
+成本估算不直接查询账单，只按报告里的 token usage 和你传入的单价计算：
+
+```bash
+arklab eval \
+  --docs examples/docs \
+  --eval-set examples/evals/qa.jsonl \
+  --input-price-per-1m 0.8 \
+  --output-price-per-1m 2.0
+```
 
 ## 开发
 
@@ -244,14 +288,16 @@ ArkLab 目前不做这些事：
 - CLI 评测主链路；
 - 方舟真实模型接入；
 - 方舟 embedding 检索；
+- 可选 LLM-as-Judge；
+- 失败 root cause 诊断；
+- trace HTML、成本估算、多次实验趋势；
 - failure pool 和回归飞轮；
 - benchmark adapter；
+- RAGAS / DeepEval / Phoenix 生态出口；
 - 离线测试和 CI。
 
 后续可以继续补：
 
 - 更强的 reranker；
-- LLM-as-Judge 失败诊断；
 - prompt / retrieval / chunking 自动消融；
-- trace 可视化；
 - 基于 CLI 产物的 dashboard。
