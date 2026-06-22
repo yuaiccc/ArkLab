@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arklab"
+version = "0.1.0"
+description = "ArkLab: arkcli-powered RAG experiment and evaluation CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.32",
+]
+
+[project.optional-dependencies]
+ragas = [
+  "ragas==0.2.15",
+  "langchain<0.4",
+  "langchain-core<0.4",
+  "langchain-community<0.4",
+  "langchain-openai<0.4",
+]
+
+[project.scripts]
+arklab = "arklab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["arklab"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

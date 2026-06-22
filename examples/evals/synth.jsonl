@@ -1,0 +1,7 @@
+{"query": "ArkLab是什么？", "answer": "ArkLab 是一个基于 arkcli 的大模型实验与 Agentic RAG 评测平台。MVP 阶段优先跑通文本 RAG 评测链路，包括 provider 封装、Hybrid Retrieval、abstain 判断、基础指标和 JSON Lines trace。", "relevant_ids": ["arklab.md#0"], "source": "arklab.md"}
+{"query": "Provider 层支持哪些 provider？", "answer": "Provider 层默认支持本地启发式 provider，也预留 arkcli provider。arkcli provider 通过 `arkcli +chat --format json` 调用方舟模型，返回字段中的 `content` 会被解析为助手回答。", "relevant_ids": ["arklab.md#0"], "source": "arklab.md"}
+{"query": "abstain 机制什么时候触发？", "answer": "abstain 机制会在检索置信度过低或 faithfulness 低于阈值时触发，系统返回结构化的无法回答响应。每次请求都会写入 JSONL trace，包含 query、hit、score、answer、metrics 和 abstain reason。", "relevant_ids": ["arklab.md#1"], "source": "arklab.md"}
+{"query": "第一阶段评测指标包含哪些？", "answer": "评测指标第一阶段包含 Recall@K、MRR、faithfulness、answer relevancy 和 abstain rate。后续版本会增加 NDCG、LLM rerank、failure_pool、自动归因和 finetune 任务管理。", "relevant_ids": ["arklab.md#1"], "source": "arklab.md"}
+{"query": "Recall@K衡量什么？", "answer": "Recall@K 衡量前 K 个检索结果中是否覆盖相关文档。它主要反映召回能力，需要评测集提供 relevant_ids。", "relevant_ids": ["rag_metrics.md#0"], "source": "rag_metrics.md"}
+{"query": "MRR衡量什么？", "answer": "MRR 衡量第一个相关文档出现的位置。相关文档越靠前，MRR 越高。", "relevant_ids": ["rag_metrics.md#0"], "source": "rag_metrics.md"}
+{"query": "JSONL trace 在数据飞轮里有什么作用？", "answer": "JSONL trace 是后续数据飞轮的输入。低 faithfulness、错误召回和过度拒答的案例会进入 failure_pool，并被归因为 retrieval_fail、rerank_fail、generation_fail_hallucination、generation_fail_abstain 或 query_fail。", "relevant_ids": ["rag_metrics.md#1"], "source": "rag_metrics.md"}

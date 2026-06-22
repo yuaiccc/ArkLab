@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+dist/
+build/
+*.egg-info/
+data/traces/*.jsonl
+data/failure_pool/*.jsonl
+data/reports/*.json
+data/flywheel/
+data/cache/
+benchmarks/enterprise_rag_bench/
+benchmarks/multihop_rag/
+benchmarks/uaeval4rag/
