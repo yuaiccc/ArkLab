@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +56,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _relevance_from_eval_row(row: dict[str, Any]) -> list[str]:
@@ -181,7 +181,7 @@ def _case_metric(case: dict[str, Any], metric: str) -> float:
     value = case.get(metric)
     if isinstance(value, bool):
         return 1.0 if value else 0.0
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return float(value)
     return 0.0
 

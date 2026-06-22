@@ -171,7 +171,7 @@ def _is_answerable(row: dict[str, Any]) -> bool:
 
 
 def _mean_metric(cases: list[dict[str, Any]], key: str) -> float:
-    values = [case[key] for case in cases if isinstance(case.get(key), int | float)]
+    values = [case[key] for case in cases if isinstance(case.get(key), (int, float))]
     return mean(values) if values else 0.0
 
 
