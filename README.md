@@ -39,6 +39,7 @@ ArkLab 可以把一个文档目录和一份 JSONL 评测集变成可复现的 RA
 - 统计模型 token usage，并可按输入 / 输出单价估算实验成本；
 - 记录 JSONL trace 和 failure pool；
 - 把 trace 转成可本地打开的 HTML；
+- 为失败样本生成逐 case Markdown 诊断；
 - 把失败样本提升成下一轮回归评测集；
 - 对比 baseline 和 candidate，判断哪些问题修复了、哪些退化了；
 - 汇总多次实验报告，观察指标趋势；
@@ -248,6 +249,7 @@ pipeline 可以基于以下信号拒答：
 
 ```bash
 arklab trace-html --trace data/traces/arklab.jsonl --output data/reports/trace.html
+arklab drilldown --report data/reports/baseline.json --output-dir data/drilldowns/baseline --failures-only
 arklab trend --reports 'data/reports/*.json' --output data/reports/trend.json
 arklab experiments --registry data/experiments/registry.jsonl --limit 10
 arklab export-report --report data/reports/baseline.json --format deepeval-json --output data/reports/deepeval.json
@@ -302,6 +304,7 @@ ArkLab 目前不做这些事：
 - 方舟 embedding 检索；
 - 可选 LLM-as-Judge；
 - 失败 root cause 诊断；
+- case drilldown；
 - trace HTML、成本估算、多次实验趋势；
 - experiment registry；
 - YAML recipe matrix；

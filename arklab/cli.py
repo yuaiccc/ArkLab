@@ -15,6 +15,7 @@ from arklab.benchmarks.multihop_rag import import_multihop_rag
 from arklab.benchmarks.uaeval4rag import UA_CATEGORIES, generate_uaeval4rag
 from arklab.cost import estimate_cost, normalize_usage, summarize_usage
 from arklab.diagnostics import summarize_diagnostics
+from arklab.drilldown import build_drilldown
 from arklab.evaluation.llm_judge import judge_cases_with_arkcli
 from arklab.embeddings.ark import ArkEmbeddingClient
 from arklab.evaluation.ragas_adapter import RagasCase, evaluate_with_ragas
@@ -274,6 +275,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
             "query": query,
             "answerable": answerable,
             "expected_behavior": row.get("expected_behavior"),
+            "expected_answer": row.get("answer") or row.get("reference"),
+            "expected_relevant_ids": list(relevance.keys()),
             "unanswerable_category": row.get("unanswerable_category"),
             "answer": result.answer,
             "abstained": result.abstained,
@@ -442,6 +445,17 @@ def cmd_experiments(args: argparse.Namespace) -> int:
     payload = {"registry": args.registry, "experiments": len(rows), "rows": rows}
     if args.output:
         _write_json(Path(args.output), payload)
+    _print_json(payload)
+    return 0
+
+
+def cmd_drilldown(args: argparse.Namespace) -> int:
+    payload = build_drilldown(
+        report_path=Path(args.report),
+        output_dir=Path(args.output_dir),
+        failures_only=args.failures_only,
+        max_cases=args.max_cases,
+    )
     _print_json(payload)
     return 0
 
@@ -935,6 +949,16 @@ def build_parser() -> argparse.ArgumentParser:
     experiments_parser.add_argument("--limit", type=int, default=20)
     experiments_parser.add_argument("--output", default=None)
     experiments_parser.set_defaults(func=cmd_experiments)
+
+    drilldown_parser = subparsers.add_parser(
+        "drilldown",
+        help="为 eval 报告生成逐 case Markdown 诊断",
+    )
+    drilldown_parser.add_argument("--report", required=True)
+    drilldown_parser.add_argument("--output-dir", required=True)
+    drilldown_parser.add_argument("--failures-only", action="store_true")
+    drilldown_parser.add_argument("--max-cases", type=int, default=None)
+    drilldown_parser.set_defaults(func=cmd_drilldown)
     return parser
 
 

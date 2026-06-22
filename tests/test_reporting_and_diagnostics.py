@@ -4,6 +4,7 @@ from pathlib import Path
 from arklab.cli import main
 from arklab.cost import estimate_cost, normalize_usage
 from arklab.diagnostics import diagnose_case
+from arklab.drilldown import build_drilldown
 from arklab.evaluation.llm_judge import extract_json_object, normalize_judge_payload
 from arklab.reporting import export_report, trace_to_html
 from arklab.trends import build_trend
@@ -78,6 +79,57 @@ def test_trace_html_and_export_formats(tmp_path: Path) -> None:
     assert json.loads(deepeval.read_text(encoding="utf-8"))[0]["input"] == "Q"
     assert export_report(report, phoenix, fmt="phoenix-jsonl")["cases"] == 1
     assert json.loads(phoenix.read_text(encoding="utf-8").strip())["output"] == "A"
+
+
+def test_drilldown_writes_case_markdown(tmp_path: Path, capsys) -> None:
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "query": "Q",
+                        "answer": "无法基于当前知识库回答这个问题。",
+                        "expected_answer": "A",
+                        "expected_relevant_ids": ["doc#0"],
+                        "hit_ids": ["doc#1"],
+                        "contexts": ["wrong context"],
+                        "answerable": True,
+                        "abstained": True,
+                        "abstain_reason": "provider_abstain",
+                        "recall_at_k": 0.0,
+                        "mrr": 0.0,
+                        "ndcg_at_k": 0.0,
+                        "faithfulness": 0.0,
+                        "answer_relevancy": 0.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "drilldown"
+    result = build_drilldown(report_path=report, output_dir=output_dir, failures_only=True)
+
+    assert result["cases"] == 1
+    assert "retrieval_failure" in (output_dir / "index.md").read_text(encoding="utf-8")
+    assert "Expected relevant ids" in next(output_dir.glob("001-*.md")).read_text(
+        encoding="utf-8"
+    )
+
+    exit_code = main(
+        [
+            "drilldown",
+            "--report",
+            str(report),
+            "--output-dir",
+            str(tmp_path / "drilldown-cli"),
+            "--failures-only",
+        ]
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert printed["cases"] == 1
 
 
 def test_trend_and_recipe_cli(tmp_path: Path, capsys) -> None:
