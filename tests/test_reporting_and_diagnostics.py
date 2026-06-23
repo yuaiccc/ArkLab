@@ -38,6 +38,31 @@ def test_usage_and_cost_normalization() -> None:
     assert cost["total_cost"] == 0.004
 
 
+def test_evidence_coverage_matches_business_hit_keys() -> None:
+    coverage = summarize_evidence_coverage(
+        [
+            {
+                "query": "て形怎么变",
+                "expected_relevant_ids": ["verb-conjugation::て形的变化规则"],
+                "top_hit": "57",
+                "hit_ids": ["57"],
+                "hit_match_keys": [
+                    [
+                        "57",
+                        "kb://grammar/verb-conjugation",
+                        "verb-conjugation",
+                        "て形的变化规则",
+                        "verb-conjugation::て形的变化规则",
+                    ]
+                ],
+            }
+        ]
+    )
+
+    assert coverage["average_coverage"] == 1.0
+    assert coverage["top_hit_relevance_rate"] == 1.0
+
+
 def test_trace_html_and_export_formats(tmp_path: Path) -> None:
     trace = tmp_path / "trace.jsonl"
     trace.write_text(

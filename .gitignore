@@ -14,5 +14,6 @@ data/reports/*.json
 data/flywheel/
 data/cache/
 benchmarks/enterprise_rag_bench/
+benchmarks/japanese_verb_master/
 benchmarks/multihop_rag/
 benchmarks/uaeval4rag/

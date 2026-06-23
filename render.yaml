@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: arklab
+    runtime: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: python -m arklab.web
+    healthCheckPath: /healthz
+    autoDeploy: true
+

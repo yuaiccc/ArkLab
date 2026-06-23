@@ -51,6 +51,18 @@ def _split_doc_id(value: str) -> tuple[str, str | None]:
     return doc_id, chunk_id if separator else None
 
 
+def _case_hit_key_groups(case: dict[str, Any]) -> list[list[str]]:
+    hit_ids = [[str(item)] for item in case.get("hit_ids") or []]
+    match_groups = case.get("hit_match_keys") or []
+    for index, group in enumerate(match_groups):
+        if not isinstance(group, list):
+            continue
+        if index >= len(hit_ids):
+            hit_ids.append([])
+        hit_ids[index].extend(str(item) for item in group if item is not None)
+    return hit_ids
+
+
 def evidence_coverage_case(case: dict[str, Any]) -> dict[str, Any]:
     expected_ids = [
         str(item)
@@ -61,7 +73,8 @@ def evidence_coverage_case(case: dict[str, Any]) -> dict[str, Any]:
             or []
         )
     ]
-    hit_ids = [str(item) for item in case.get("hit_ids") or []]
+    hit_key_groups = _case_hit_key_groups(case)
+    hit_ids = [key for group in hit_key_groups for key in group]
     matched: list[str] = []
     missing: list[str] = []
     for expected in expected_ids:
@@ -71,15 +84,19 @@ def evidence_coverage_case(case: dict[str, Any]) -> dict[str, Any]:
             missing.append(expected)
 
     coverage = len(matched) / len(expected_ids) if expected_ids else None
-    top_hit = str(case.get("top_hit") or "")
+    top_hit_group = hit_key_groups[0] if hit_key_groups else [str(case.get("top_hit") or "")]
     return {
         "query": case.get("query"),
         "expected_count": len(expected_ids),
         "matched_count": len(matched),
         "coverage": coverage,
         "top_hit_relevant": (
-            any(_id_matches(expected, top_hit) for expected in expected_ids)
-            if expected_ids and top_hit
+            any(
+                _id_matches(expected, hit_key)
+                for expected in expected_ids
+                for hit_key in top_hit_group
+            )
+            if expected_ids and top_hit_group
             else None
         ),
         "matched_expected_ids": matched,

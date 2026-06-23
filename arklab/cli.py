@@ -23,6 +23,7 @@ from arklab.cost import estimate_cost, normalize_usage, summarize_usage
 from arklab.diagnostics import summarize_diagnostics
 from arklab.drilldown import build_compare_drilldown, build_drilldown
 from arklab.evaluation.llm_judge import judge_cases_with_arkcli
+from arklab.evaluation.metrics import answer_relevancy, lexical_faithfulness
 from arklab.embeddings.ark import ArkEmbeddingClient
 from arklab.evaluation.ragas_adapter import RagasCase, evaluate_with_ragas
 from arklab.experiments import append_experiment, build_experiment_record, load_experiments
@@ -36,6 +37,7 @@ from arklab.rag.retrieval import HybridRetriever
 from arklab.rag.rerank import create_reranker
 from arklab.recipes import RECIPES, recipe_file_manifest, recipe_manifest, run_recipe, run_recipe_file
 from arklab.reporting import export_report, trace_to_html
+from arklab.targets.jvm import JapaneseVerbMasterClient
 from arklab.text import load_documents, sentence_split
 from arklab.trace.failure_pool import FailurePoolWriter, classify_failure
 from arklab.trace.writer import TraceWriter
@@ -212,6 +214,9 @@ def _hit_keys(hit: RetrievalHit) -> list[str]:
     doc_id = hit.chunk.metadata.get("doc_id")
     if doc_id:
         keys.append(str(doc_id))
+    match_keys = hit.chunk.metadata.get("match_keys")
+    if isinstance(match_keys, list):
+        keys.extend(str(item) for item in match_keys if item is not None)
     return keys
 
 
@@ -408,6 +413,210 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def _jvm_relevance_from_row(row: dict[str, Any]) -> dict[str, float]:
+    expected = row.get("expected")
+    if expected:
+        values = expected if isinstance(expected, list) else [expected]
+        return {str(value): 1.0 for value in values}
+    return _relevance_from_row(row)
+
+
+def _looks_like_abstention(answer: str) -> bool:
+    text = answer.strip()
+    markers = (
+        "ABSTAIN",
+        "暂未找到",
+        "无法回答",
+        "不能回答",
+        "没有足够",
+        "no sufficient",
+        "cannot answer",
+    )
+    lower = text.lower()
+    return any(marker.lower() in lower for marker in markers)
+
+
+def cmd_eval_jvm(args: argparse.Namespace) -> int:
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = time.perf_counter()
+    rows = _load_eval_rows(Path(args.eval_set))
+    if not rows:
+        raise SystemExit(f"empty eval set: {args.eval_set}")
+
+    client = JapaneseVerbMasterClient(args.base_url, timeout=args.timeout)
+    trace_writer = TraceWriter(Path(args.trace)) if args.trace else None
+    failure_pool = FailurePoolWriter(Path(args.failure_pool)) if args.failure_pool else None
+    per_case: list[dict[str, Any]] = []
+
+    for row in rows:
+        query = str(row["query"])
+        answerable = _is_answerable(row)
+        relevance = _jvm_relevance_from_row(row)
+        search = client.search(
+            query,
+            top_k=args.top_k,
+            level=args.level,
+            category=args.category,
+        )
+        top_hits = search.hits[: args.top_k]
+        recall = _recall_for_relevance(top_hits, relevance) if answerable else None
+
+        answer = ""
+        provider_raw: dict[str, Any] = {"mode": args.mode}
+        if args.mode == "agent":
+            agent = client.agent_run(query, context={"arklabEval": True})
+            answer = agent.answer
+            provider_raw["agent"] = agent.raw or {}
+            contexts = [hit.chunk.text for hit in top_hits]
+            faithfulness = lexical_faithfulness(answer, contexts)
+            relevancy = answer_relevancy(answer, query)
+            abstained = _looks_like_abstention(answer)
+            abstain_reason = "provider_abstain" if abstained else None
+        else:
+            contexts = [hit.chunk.text for hit in top_hits]
+            answer = "[retrieval-only evaluation]"
+            if answerable:
+                faithfulness = 1.0 if recall and recall > 0.0 else 0.0
+                relevancy = 1.0 if recall and recall > 0.0 else 0.0
+                abstained = False
+                abstain_reason = None
+            else:
+                faithfulness = 1.0 if not top_hits else 0.0
+                relevancy = 1.0 if not top_hits else 0.0
+                abstained = not top_hits
+                abstain_reason = "no_retrieval_hit" if abstained else None
+
+        case = {
+            "query": query,
+            "answerable": answerable,
+            "expected_behavior": row.get("expected_behavior"),
+            "expected_answer": row.get("answer") or row.get("reference"),
+            "expected_relevant_ids": list(relevance.keys()),
+            "unanswerable_category": row.get("unanswerable_category"),
+            "answer": answer,
+            "abstained": abstained,
+            "abstain_reason": abstain_reason,
+            "recall_at_k": recall,
+            "mrr": _mrr_for_relevance(search.hits, relevance) if answerable else None,
+            "ndcg_at_k": _ndcg_for_relevance(top_hits, relevance) if answerable else None,
+            "faithfulness": faithfulness,
+            "answer_relevancy": relevancy,
+            "rejection_correct": (not answerable and abstained),
+            "top_hit": top_hits[0].chunk.id if top_hits else None,
+            "hit_ids": [hit.chunk.id for hit in search.hits],
+            "hit_match_keys": [hit.chunk.metadata.get("match_keys", []) for hit in search.hits],
+            "provider": {
+                "model": "japanese-verb-master",
+                "usage": {},
+                "raw": provider_raw,
+            },
+            "retriever": {
+                "name": "japanese-verb-master:/api/knowledge/search",
+                "degraded": search.degraded,
+            },
+            "contexts": contexts,
+        }
+        per_case.append(case)
+        failure_type = classify_failure(
+            recall=recall,
+            abstained=abstained,
+            faithfulness=faithfulness,
+            answerable=answerable,
+            abstain_reason=abstain_reason,
+        )
+        if failure_pool and failure_type:
+            failure_pool.write(
+                {
+                    "failure_type": failure_type,
+                    "query": query,
+                    "answerable": answerable,
+                    "expected_behavior": row.get("expected_behavior"),
+                    "unanswerable_category": row.get("unanswerable_category"),
+                    "expected_relevance": relevance,
+                    "answer": answer,
+                    "abstained": abstained,
+                    "abstain_reason": abstain_reason,
+                    "metrics": case,
+                }
+            )
+        if trace_writer:
+            trace_writer.write(
+                {
+                    "event": "jvm_eval_case",
+                    "query": query,
+                    "answer": answer,
+                    "hits": [
+                        {
+                            "id": hit.chunk.id,
+                            "source": hit.chunk.source,
+                            "rank": hit.rank,
+                            "score": hit.score,
+                            "match_keys": hit.chunk.metadata.get("match_keys", []),
+                        }
+                        for hit in search.hits
+                    ],
+                    "metrics": {
+                        "recall_at_k": recall,
+                        "mrr": case["mrr"],
+                        "ndcg_at_k": case["ndcg_at_k"],
+                        "faithfulness": faithfulness,
+                        "answer_relevancy": relevancy,
+                    },
+                }
+            )
+
+    answerable_cases = [case for case in per_case if case["answerable"]]
+    unanswerable_cases = [case for case in per_case if not case["answerable"]]
+    summary = {
+        "cases": len(per_case),
+        "answerable_cases": len(answerable_cases),
+        "unanswerable_cases": len(unanswerable_cases),
+        "recall_at_k": _mean_metric(answerable_cases, "recall_at_k"),
+        "mrr": _mean_metric(answerable_cases, "mrr"),
+        "ndcg_at_k": _mean_metric(answerable_cases, "ndcg_at_k"),
+        "faithfulness": mean(case["faithfulness"] for case in per_case),
+        "answer_relevancy": mean(case["answer_relevancy"] for case in per_case),
+        "abstain_rate": mean(1.0 if case["abstained"] else 0.0 for case in per_case),
+        "rejection_rate": (
+            mean(1.0 if case["abstained"] else 0.0 for case in unanswerable_cases)
+            if unanswerable_cases
+            else 0.0
+        ),
+        "false_answer_rate": (
+            mean(0.0 if case["abstained"] else 1.0 for case in unanswerable_cases)
+            if unanswerable_cases
+            else 0.0
+        ),
+    }
+    payload: dict[str, Any] = {
+        "summary": summary,
+        "target": {
+            "name": "japanese-verb-master",
+            "base_url": args.base_url,
+            "mode": args.mode,
+        },
+        "retriever": {"name": "japanese-verb-master:/api/knowledge/search"},
+        "usage": summarize_usage(per_case),
+        "diagnostics": summarize_diagnostics(per_case),
+        "evidence_coverage": summarize_evidence_coverage(per_case),
+        "cases": per_case,
+    }
+    if args.output:
+        _write_json(Path(args.output), payload)
+    if args.experiment_registry:
+        append_experiment(
+            Path(args.experiment_registry),
+            build_experiment_record(
+                args=args,
+                payload=payload,
+                started_at=started_at,
+                elapsed_seconds=time.perf_counter() - started,
+            ),
+        )
+    _print_json(payload)
+    return 0
+
+
 def cmd_trace_html(args: argparse.Namespace) -> int:
     payload = trace_to_html(Path(args.trace), Path(args.output))
     _print_json(payload)
@@ -555,6 +764,54 @@ def cmd_synth_qa(args: argparse.Namespace) -> int:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     _print_json({"output": str(output), "rows": len(rows)})
+    return 0
+
+
+def cmd_import_jvm_golden(args: argparse.Namespace) -> int:
+    source_dir = Path(args.source_dir)
+    golden_path = source_dir / "golden-set.json"
+    if not golden_path.exists():
+        raise SystemExit(f"missing japanese-verb-master golden set: {golden_path}")
+    golden = json.loads(golden_path.read_text(encoding="utf-8"))
+    rows: list[dict[str, Any]] = []
+    for item in golden.get("cases", []):
+        expected = item.get("expected")
+        expected_values = expected if isinstance(expected, list) else [expected]
+        rows.append(
+            {
+                "query": item["query"],
+                "expected": expected,
+                "relevant_ids": [str(value) for value in expected_values if value],
+                "answerable": True,
+            }
+        )
+
+    adversarial_rows = 0
+    adversarial_path = source_dir / "adversarial-set.json"
+    if args.include_adversarial and adversarial_path.exists():
+        adversarial = json.loads(adversarial_path.read_text(encoding="utf-8"))
+        for item in adversarial.get("cases", []):
+            rows.append(
+                {
+                    "query": item["query"],
+                    "answerable": False,
+                    "expected_behavior": "abstain",
+                    "unanswerable_category": "out_of_domain",
+                }
+            )
+            adversarial_rows += 1
+
+    output = Path(args.output)
+    write_jsonl(output, rows)
+    _print_json(
+        {
+            "source_dir": str(source_dir),
+            "output": str(output),
+            "rows": len(rows),
+            "golden_rows": len(rows) - adversarial_rows,
+            "adversarial_rows": adversarial_rows,
+        }
+    )
     return 0
 
 
@@ -790,6 +1047,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.set_defaults(func=cmd_eval)
 
+    eval_jvm_parser = subparsers.add_parser(
+        "eval-jvm",
+        help="评测本地 japanese-verb-master 的知识库/Agent API",
+    )
+    eval_jvm_parser.add_argument("--eval-set", required=True, help="ArkLab JSONL 或 JVM golden 转换集")
+    eval_jvm_parser.add_argument("--base-url", default="http://localhost:3456")
+    eval_jvm_parser.add_argument("--mode", choices=["search", "agent"], default="search")
+    eval_jvm_parser.add_argument("--top-k", type=int, default=5)
+    eval_jvm_parser.add_argument("--level", default="")
+    eval_jvm_parser.add_argument("--category", default="")
+    eval_jvm_parser.add_argument("--timeout", type=float, default=30.0)
+    eval_jvm_parser.add_argument("--trace", default="data/traces/japanese-verb-master.jsonl")
+    eval_jvm_parser.add_argument("--output", default=None, help="把完整评测报告写入 JSON 文件")
+    eval_jvm_parser.add_argument(
+        "--failure-pool",
+        default="data/failure_pool/japanese-verb-master.jsonl",
+        help="失败样本 JSONL；传空字符串可关闭",
+    )
+    eval_jvm_parser.add_argument("--experiment-name", default=None)
+    eval_jvm_parser.add_argument(
+        "--experiment-registry",
+        default="data/experiments/registry.jsonl",
+        help="实验登记表 JSONL；传空字符串可关闭",
+    )
+    eval_jvm_parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="实验标签，可重复传入，例如 --tag target=jvm --tag mode=search",
+    )
+    eval_jvm_parser.set_defaults(func=cmd_eval_jvm)
+
     synth_parser = subparsers.add_parser("synth-qa", help="从知识库生成冷启动 JSONL 评测集")
     synth_parser.add_argument("--docs", required=True, help="知识库目录或单个 .txt/.md 文件")
     synth_parser.add_argument("--output", required=True, help="输出 JSONL 路径")
@@ -798,6 +1087,27 @@ def build_parser() -> argparse.ArgumentParser:
     synth_parser.add_argument("--questions-per-chunk", type=int, default=2)
     synth_parser.add_argument("--min-sentence-chars", type=int, default=18)
     synth_parser.set_defaults(func=cmd_synth_qa)
+
+    import_jvm_parser = subparsers.add_parser(
+        "import-jvm-golden",
+        help="把 japanese-verb-master 自带 golden/adversarial 集转换为 ArkLab JSONL",
+    )
+    import_jvm_parser.add_argument(
+        "--source-dir",
+        default="../japanese-verb-master/backend/knowledge-source",
+        help="japanese-verb-master/backend/knowledge-source 目录",
+    )
+    import_jvm_parser.add_argument(
+        "--output",
+        default="benchmarks/japanese_verb_master/golden_eval.jsonl",
+        help="输出 ArkLab JSONL 评测集",
+    )
+    import_jvm_parser.add_argument(
+        "--include-adversarial",
+        action="store_true",
+        help="同时导入离题对抗问题，作为应拒答样本",
+    )
+    import_jvm_parser.set_defaults(func=cmd_import_jvm_golden)
 
     enterprise_parser = subparsers.add_parser(
         "import-enterprise-rag-bench",

@@ -47,6 +47,7 @@ ArkLab 可以把一个文档目录和一份 JSONL 评测集变成可复现的 RA
 - 记录实验登记表，保留每轮配置、指标、成本、git sha 和报告路径；
 - 用 YAML recipe matrix 批量跑 prompt / retriever / chunking 消融；
 - 导入或生成 EnterpriseRAG-Bench、MultiHop-RAG、无答案题等 benchmark 风格数据；
+- 把 japanese-verb-master 这类真实业务系统作为外部 target 评测；
 - 可选接入 RAGAS，复用标准 RAG 评测指标；
 - 导出 DeepEval / Phoenix 形状的数据，方便接入现有评测和可观测生态。
 
@@ -92,6 +93,7 @@ arklab/
   rag/            检索、rerank、RAG pipeline
   evaluation/     基础指标和 RAGAS adapter
   benchmarks/     benchmark 导入与转换
+  targets/        外部业务系统 target adapter
   trace/          JSONL trace 和 failure pool writer
   flywheel.py     失败样本提升与前后对比
   cli.py          命令行入口
@@ -123,6 +125,67 @@ arklab eval --docs examples/docs --eval-set examples/evals/qa.jsonl
 ```bash
 arklab query --docs examples/docs "ArkLab 的 abstain 机制什么时候触发？"
 ```
+
+## Web UI
+
+ArkLab 带一个只读 Web UI，用来展示产品定位、样例指标、失败归因和本地命令模板。真实评测仍建议在本机 CLI 运行，避免把私有知识库、trace、API Key 或 benchmark 数据放到公网服务。
+
+本地启动：
+
+```bash
+python -m arklab.web
+```
+
+Render 部署使用仓库里的 `render.yaml`。先验证配置：
+
+```bash
+render blueprints validate render.yaml
+```
+
+也可以用 CLI 创建 Web Service：
+
+```bash
+render services create \
+  --name arklab \
+  --type web_service \
+  --runtime python \
+  --repo https://github.com/yuaiccc/ArkLab \
+  --branch main \
+  --build-command "pip install -e ." \
+  --start-command "python -m arklab.web" \
+  --health-check-path /healthz \
+  --plan free \
+  --auto-deploy \
+  --confirm \
+  --output json
+```
+
+## 接真实业务系统
+
+ArkLab 也可以不自己跑 RAG，而是把已有应用当成被测对象。当前内置了
+`japanese-verb-master` target：ArkLab 调它的本地 API，收集检索结果、答案、引用上下文，再统一输出指标、trace、failure pool 和诊断报告。
+
+先把 japanese-verb-master 自带评测集转成 ArkLab JSONL：
+
+```bash
+arklab import-jvm-golden \
+  --source-dir ../japanese-verb-master/backend/knowledge-source \
+  --include-adversarial \
+  --output benchmarks/japanese_verb_master/golden_eval.jsonl
+```
+
+启动 japanese-verb-master 后，先测知识库检索层：
+
+```bash
+arklab eval-jvm \
+  --base-url http://localhost:3456 \
+  --mode search \
+  --eval-set benchmarks/japanese_verb_master/golden_eval.jsonl \
+  --output data/reports/japanese-verb-master-search.json
+```
+
+要测完整 Agent 回答，把 `--mode search` 改成 `--mode agent`。这个模式会额外调用
+`/api/agent/run`，适合看回答是否基于检索上下文、是否过度拒答、是否对离题问题乱答。
 
 ## 接真实模型
 
